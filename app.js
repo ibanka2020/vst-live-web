@@ -169,6 +169,12 @@ async function fetchText(url, opts) {
 function authHeaders(extra) {
   return Object.assign(session && session.sessionid ? { sessionid: session.sessionid } : {}, extra || {});
 }
+/* 实际请求基地址：设置里填了自定义服务地址（例如局域网里跑着 APK 的设备
+   http://192.168.x.x:53812）就用它，否则用登录时选的节点 */
+function base() {
+  const o = (settings.base || '').trim().replace(/\/+$/, '');
+  return o || (session && session.node) || DEFAULT_NODES.https[0];
+}
 
 /* ---------- 点播配置（api/v3/json，回退 api/v2/api） ---------- */
 async function loadConfig() {
@@ -176,10 +182,13 @@ async function loadConfig() {
   let lastErr = null;
   for (const path of ['/api/v3/json', '/api/v2/api']) {
     try {
-      const text = await fetchText(session.node + path, { headers: authHeaders() });
-      const obj = JSON.parse(text);
+      const text = await fetchText(base() + path, { headers: authHeaders() });
+      if (!text || !text.trim()) throw new Error(path + ' 返回空响应（0 字节）。公网节点本身不提供数据：APK 的数据是它内置的本地服务经 mesh/P2P 通道取的，浏览器直连/代理都只能拿到空壳。解决办法见「设置」里的自定义服务地址说明。');
+      let obj;
+      try { obj = JSON.parse(text); }
+      catch (e) { throw new Error(path + ' 返回的不是 JSON（前 100 字：' + text.slice(0, 100) + '）'); }
       if (obj && (obj.sites || obj.lives)) { config = obj; return config; }
-      lastErr = new Error(path + ' 返回的不是配置 JSON');
+      lastErr = new Error(path + ' 返回的 JSON 里没有 sites/lives');
     } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('配置加载失败');
@@ -319,7 +328,8 @@ function parseLiveTxt(text) {
   return groups.filter(g => g.channels.length);
 }
 async function loadLiveGroups() {
-  const text = await fetchText(session.node + '/api/v3/live', { headers: authHeaders() });
+  const text = await fetchText(base() + '/api/v3/live', { headers: authHeaders() });
+  if (!text || !text.trim()) throw new Error('/api/v3/live 返回空响应：公网节点不直接提供直播数据（见首页说明），需要可达的服务地址。');
   let groups = parseLiveText(text);
   // lives 型配置：JSON 里 lives[].url 各自指向一份播放列表
   try {
@@ -343,7 +353,7 @@ async function livePlayUrl(channel) {
   if (/^https?:\/\//.test(first) && /\.(m3u8|mp4|flv|ts)(\?|$)/i.test(first)) return { url: first };
   if (/^https?:\/\//.test(first) && channel.urls.length === 1 && !/tvbus/i.test(first)) return { url: first };
   const chid = channel.id || channel.name;
-  const text = await fetchText(session.node + '/api/v3/liveids', {
+  const text = await fetchText(base() + '/api/v3/liveids', {
     headers: authHeaders({ language: (navigator.language || 'zh-CN').replace('_', '-'), chid })
   });
   const obj = JSON.parse(text);
@@ -407,29 +417,38 @@ async function renderLogin(msg) {
     <input id="lg-code" type="text" placeholder="请输入授权码" value="${esc(session ? session.code : '')}">
     <label>服务器节点（登录时自动测速，也可手动指定）</label>
     <select id="lg-node">${DEFAULT_NODES.https.map(n => `<option ${session && session.node === n ? 'selected' : ''}>${n}</option>`).join('')}</select>
+    <label>自定义服务地址（可选，优先于上面的节点）</label>
+    <input id="lg-base" type="text" placeholder="例如 http://192.168.1.10:53812（局域网里跑着 APK 的设备）" value="${esc(settings.base || '')}">
     <div class="row-btns">
       <button class="primary" id="lg-go">登录</button>
       <button id="lg-skip">先看看（不登录）</button>
     </div>
     <div class="node-test" id="lg-status">${esc(msg || '')}</div>
-    <div class="warn">浏览器与电视盒不同：节点服务器若未开启 CORS，直连会被浏览器拦截，
-      登录/加载失败时请到「设置」填 CORS 代理前缀再试；UDP/P2P（TVBus）频道流浏览器无法直接拉取，会给出提示。</div>
+    <div class="warn">实测结论（2026-10-10）：公网节点域名只是占位页，/api/v3/* 全部返回空——
+      APK 的点播/直播数据是它内置的本地服务（127.0.0.1:53812）经原生 mesh/UDP 通道取的，浏览器拿不到。
+      真正可行的用法：在电视/手机上开着这个 APK，把上面「自定义服务地址」填成那台设备的
+      http://局域网IP:53812，网页版就能借它的本地服务取数据（需同一局域网）。</div>
     <div class="login-foot">唯一TG電報群:@VSTSVIP　最新版APP下載網址:https://app.vstvip.us/</div>
   </div></div>`;
   $('#lg-go').addEventListener('click', async () => {
+    settings.base = $('#lg-base').value.trim();
+    LS.set('vst_settings', settings);
     const code = $('#lg-code').value.trim();
     const status = $('#lg-status');
     if (!code) { status.textContent = '请先输入授权码'; return; }
     try {
       status.textContent = '正在派生 sessionid 并测速节点…';
       const sid = await makeSessionId(code);
-      const prefer = $('#lg-node').value;
+      const prefer = ($('#lg-base') && $('#lg-base').value.trim().replace(/\/+$/, '')) || $('#lg-node').value;
       const nodes = [prefer, ...DEFAULT_NODES.https.filter(n => n !== prefer)];
       let chosen = null; const lines = [];
       for (const n of nodes) {
         const t0 = performance.now();
         try {
-          await fetchText(n + '/v6/test.json', { headers: { sessionid: sid }, timeout: 8000 });
+          const txt = await fetchText(n + '/v6/test.json', { headers: { sessionid: sid }, timeout: 8000 });
+          let okJson = false;
+          try { const o = JSON.parse(txt); okJson = o && ('status' in o); } catch (e) { /* 非 JSON */ }
+          if (!okJson) throw new Error('响应不是状态 JSON（' + (txt ? '前 30 字：' + txt.slice(0, 30) : '空响应') + '）——公网节点是占位页，真实服务不应答此地址');
           lines.push('✓ ' + n + ' ' + Math.round(performance.now() - t0) + 'ms');
           if (!chosen) chosen = n;
         } catch (e) { lines.push('✗ ' + n + ' ' + (e.message || e)); }
@@ -448,6 +467,8 @@ async function renderLogin(msg) {
     } catch (e) { status.textContent = '登录失败：' + (e.message || e); }
   });
   $('#lg-skip').addEventListener('click', () => {
+    settings.base = $('#lg-base').value.trim();
+    LS.set('vst_settings', settings);
     session = session || { node: $('#lg-node').value, sessionid: '', code: '' };
     LS.set('vst_session', session);
     views.home();
@@ -663,16 +684,26 @@ function renderSettings() {
       <dt>授权码</dt><dd>${esc(session ? session.code : '')}</dd>
       <dt>sessionid</dt><dd>${session && session.sessionid ? esc(session.sessionid.slice(0, 40)) + '…' : '无'}</dd>
     </dl>
+    <h3>自定义服务地址</h3>
+    <p style="color:var(--muted);font-size:14px">公网节点不直接提供数据（实测 /api/v3/* 全是空响应）。
+    可行的路径：在电视/手机上开着 APK，把这里填成那台设备的局域网地址，如
+    <code>http://192.168.1.10:53812</code>，网页版会改从它取全部数据（需同一局域网，且该本地服务允许跨域时才读得到）。</p>
+    <p><input id="set-base" style="width:min(560px,90%)" placeholder="http://192.168.x.x:53812" value="${esc(settings.base || '')}">
+    <button id="set-base-save">保存</button></p>
     <h3>CORS 代理前缀</h3>
     <p style="color:var(--muted);font-size:14px">服务器没开跨域时，浏览器会拦截所有请求。可填一个你信任的代理前缀，
     请求会变成「前缀 + 编码后的真实地址」。注意：走代理时 sessionid 等请求头可能被丢弃，直播 liveids 可能受影响。</p>
-    <p><input id="set-proxy" style="width:min(560px,90%)" placeholder="例如 https://corsproxy.io/?url=" value="${esc(settings.proxy)}">
+    <p><input id="set-proxy" style="width:min(560px,90%)" placeholder="例如 https://vst-proxy.xxx.workers.dev/?url=（自建 Worker，见仓库 cors-worker.js）" value="${esc(settings.proxy)}">
     <button id="set-proxy-save">保存</button></p>
     <h3>数据</h3>
     <p><button id="set-logout">退出登录</button> <button id="set-clear">清除历史与收藏</button></p>
     <h3>节点一览（逆向自 APK）</h3>
     <p>${DEFAULT_NODES.https.map(n => '<code>' + n + '</code>').join('<br>')}</p>
     <p>${DEFAULT_NODES.udp.map(n => '<code>' + n + '</code>').join('<br>')}</p>`;
+  $('#set-base-save').addEventListener('click', () => {
+    settings.base = $('#set-base').value.trim();
+    LS.set('vst_settings', settings); config = null; liveGroups = []; toast('已保存，重新进入首页/直播生效');
+  });
   $('#set-proxy-save').addEventListener('click', () => {
     settings.proxy = $('#set-proxy').value.trim();
     LS.set('vst_settings', settings); config = null; toast('已保存');
