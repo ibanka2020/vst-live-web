@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全聚合 VST 直播地址 · APK 逆向结果</title>
+<meta name="description" content="全聚合（com.vlive.vst 2.1.2）APK 逆向提取的全部直播接口与服务器节点地址">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>全聚合 VST 直播地址</h1>
+  <p class="sub">APK 逆向结果 · com.vlive.vst 2.1.2 · 2026-10-10</p>
+  <div class="stats">
+    <div class="stat"><b id="stat-nodes">–</b><span>服务器节点</span></div>
+    <div class="stat"><b id="stat-live">–</b><span>直播接口</span></div>
+    <div class="stat"><b>0</b><span>APK 内置 m3u8</span></div>
+  </div>
+  <div class="searchbar">
+    <input id="search" type="search" placeholder="搜索地址 / 节点 / 说明…">
+    <button id="copy-all" type="button">复制全部直播接口</button>
+  </div>
+  <p class="hint">这个 APK 里没有写死任何单频道地址：直播频道由下面的服务器接口在授权码登录后动态下发，这里列全了能从 APK 里确定的直播地址。</p>
+</header>
+<main id="app"><p class="loading">加载数据中…</p></main>
+<footer>
+  <p>来源样本：____212_0_v6be.apk · SHA-256 <code>e8e77808f0557a8af2833ff390e975bf910e81839953a58fc9e9e63ee4d2179f</code></p>
+  <p>动态更新通道：DNS TXT <code>txt.vstvip.us</code>，2026-10-10 实查解码结果与写死列表一致（cmsVer 20260422090428）。</p>
+</footer>
+<script src="app.js"></script>
+</body>
+</html>
